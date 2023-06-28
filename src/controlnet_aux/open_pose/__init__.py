@@ -1,6 +1,8 @@
 import os
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
+import warnings
+
 import torch
 import cv2
 import numpy as np
@@ -75,7 +77,7 @@ class OpenposeDetector:
 
         return cls(body_estimation, hand_estimation, face_estimation)
 
-    def __call__(self, input_image, detect_resolution=512, image_resolution=512, hand=False, face=False, return_pil=True):
+    def __call__(self, input_image, detect_resolution=512, image_resolution=512, hand_and_face=False, hand=False, face=False, return_pil=True, **kwargs):
         # hand = False
         if not isinstance(input_image, np.ndarray):
             input_image = np.array(input_image, dtype=np.uint8)
@@ -88,6 +90,12 @@ class OpenposeDetector:
             candidate, subset = self.body_estimation(input_image)
             hands = []
             faces = []
+
+            if hand_and_face:
+                warnings.warn("`hand_and_face` argument is deprecated. Use `hand` and `face` arguments instead.", DeprecationWarning)
+                hand = hand_and_face
+                face = hand_and_face
+
             if hand:
                 # Hand
                 hands_list = handDetect(candidate, subset, input_image)

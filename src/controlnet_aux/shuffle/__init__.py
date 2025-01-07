@@ -1,13 +1,21 @@
-import random
+import warnings
 
 import cv2
 import numpy as np
 from PIL import Image
-from ..open_pose.util import HWC3, resize_image
+
+from ..util import HWC3, img2mask, make_noise_disk, resize_image
 
 
 class ContentShuffleDetector:
-    def __call__(self, input_image, h=None, w=None, f=None, detect_resolution=512, image_resolution=512, return_pil=True):
+    def __call__(self, input_image, h=None, w=None, f=None, detect_resolution=512, image_resolution=512, output_type="pil", **kwargs):
+        if "return_pil" in kwargs:
+            warnings.warn("return_pil is deprecated. Use output_type instead.", DeprecationWarning)
+            output_type = "pil" if kwargs["return_pil"] else "np"
+        if type(output_type) is bool:
+            warnings.warn("Passing `True` or `False` to `output_type` is deprecated and will raise an error in future versions")
+            if output_type:
+                output_type = "pil"
 
         if not isinstance(input_image, np.ndarray):
             input_image = np.array(input_image, dtype=np.uint8)
@@ -25,20 +33,23 @@ class ContentShuffleDetector:
         x = make_noise_disk(h, w, 1, f) * float(W - 1)
         y = make_noise_disk(h, w, 1, f) * float(H - 1)
         flow = np.concatenate([x, y], axis=2).astype(np.float32)
-        image = cv2.remap(input_image, flow, None, cv2.INTER_LINEAR)
+        detected_map = cv2.remap(input_image, flow, None, cv2.INTER_LINEAR)
 
-        img = resize_image(image, image_resolution)
+        img = resize_image(input_image, image_resolution)
+        H, W, C = img.shape
 
-        if return_pil:
-            image = Image.fromarray(image)
+        detected_map = cv2.resize(detected_map, (W, H), interpolation=cv2.INTER_LINEAR)
 
-        return image
+        if output_type == "pil":
+            detected_map = Image.fromarray(detected_map)
+
+        return detected_map
 
 
 class ColorShuffleDetector:
     def __call__(self, img):
         H, W, C = img.shape
-        F = random.randint(64, 384)
+        F = np.random.randint(64, 384)
         A = make_noise_disk(H, W, 3, F)
         B = make_noise_disk(H, W, 3, F)
         C = (A + B) / 2.0
@@ -87,31 +98,3 @@ class Image2MaskShuffleDetector:
         m = img2mask(img, self.H, self.W)
         m *= 255.0
         return m.clip(0, 255).astype(np.uint8)
-
-
-def make_noise_disk(H, W, C, F):
-    noise = np.random.uniform(low=0, high=1, size=((H // F) + 2, (W // F) + 2, C))
-    noise = cv2.resize(noise, (W + 2 * F, H + 2 * F), interpolation=cv2.INTER_CUBIC)
-    noise = noise[F: F + H, F: F + W]
-    noise -= np.min(noise)
-    noise /= np.max(noise)
-    if C == 1:
-        noise = noise[:, :, None]
-    return noise
-
-
-def img2mask(img, H, W, low=10, high=90):
-    assert img.ndim == 3 or img.ndim == 2
-    assert img.dtype == np.uint8
-
-    if img.ndim == 3:
-        y = img[:, :, random.randrange(0, img.shape[2])]
-    else:
-        y = img
-
-    y = cv2.resize(y, (W, H), interpolation=cv2.INTER_CUBIC)
-
-    if random.uniform(0, 1) < 0.5:
-        y = 255 - y
-
-    return y < np.percentile(y, random.randrange(low, high))

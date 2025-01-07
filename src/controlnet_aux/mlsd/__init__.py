@@ -1,22 +1,23 @@
+import os
+import warnings
+
 import cv2
 import numpy as np
 import torch
-import os
-
 from huggingface_hub import hf_hub_download
-from .models.mbv2_mlsd_tiny import MobileV2_MLSD_Tiny
+from PIL import Image
+
+from ..util import HWC3, resize_image
 from .models.mbv2_mlsd_large import MobileV2_MLSD_Large
 from .utils import pred_lines
-from PIL import Image
-from ..open_pose.util import HWC3, resize_image
 
 
 class MLSDdetector:
     def __init__(self, model):
-        self.model = model.eval()
+        self.model = model
 
     @classmethod
-    def from_pretrained(cls, pretrained_model_or_path, filename=None, cache_dir=None):
+    def from_pretrained(cls, pretrained_model_or_path, filename=None, cache_dir=None, local_files_only=False):
         if pretrained_model_or_path == "lllyasviel/ControlNet":
             filename = filename or "annotator/ckpts/mlsd_large_512_fp32.pth"
         else:
@@ -25,14 +26,27 @@ class MLSDdetector:
         if os.path.isdir(pretrained_model_or_path):
             model_path = os.path.join(pretrained_model_or_path, filename)
         else:
-            model_path = hf_hub_download(pretrained_model_or_path, filename, cache_dir=cache_dir)
+            model_path = hf_hub_download(pretrained_model_or_path, filename, cache_dir=cache_dir, local_files_only=local_files_only)
 
         model = MobileV2_MLSD_Large()
         model.load_state_dict(torch.load(model_path), strict=True)
+        model.eval()
 
         return cls(model)
 
-    def __call__(self, input_image, thr_v=0.1, thr_d=0.1, detect_resolution=512, image_resolution=512, return_pil=True):
+    def to(self, device):
+        self.model.to(device)
+        return self
+    
+    def __call__(self, input_image, thr_v=0.1, thr_d=0.1, detect_resolution=512, image_resolution=512, output_type="pil", **kwargs):
+        if "return_pil" in kwargs:
+            warnings.warn("return_pil is deprecated. Use output_type instead.", DeprecationWarning)
+            output_type = "pil" if kwargs["return_pil"] else "np"
+        if type(output_type) is bool:
+            warnings.warn("Passing `True` or `False` to `output_type` is deprecated and will raise an error in future versions")
+            if output_type:
+                output_type = "pil"
+
         if not isinstance(input_image, np.ndarray):
             input_image = np.array(input_image, dtype=np.uint8)
 
@@ -52,14 +66,14 @@ class MLSDdetector:
             pass
 
         detected_map = img_output[:, :, 0]
-
         detected_map = HWC3(detected_map)
+
         img = resize_image(input_image, image_resolution)
         H, W, C = img.shape
 
-        detected_map = cv2.resize(detected_map, (W, H), interpolation=cv2.INTER_NEAREST)
+        detected_map = cv2.resize(detected_map, (W, H), interpolation=cv2.INTER_LINEAR)
 
-        if return_pil:
+        if output_type == "pil":
             detected_map = Image.fromarray(detected_map)
 
         return detected_map

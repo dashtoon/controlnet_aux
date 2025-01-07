@@ -1,14 +1,15 @@
 import os
-import cv2
-import torch
-import numpy as np
+import warnings
 
-from huggingface_hub import hf_hub_download
+import cv2
+import numpy as np
+import torch
 import torch.nn as nn
 from einops import rearrange
+from huggingface_hub import hf_hub_download
 from PIL import Image
-from ..open_pose.util import HWC3, resize_image
 
+from ..util import HWC3, resize_image
 
 norm_layer = nn.InstanceNorm2d
 
@@ -92,15 +93,11 @@ class Generator(nn.Module):
 
 class LineartDetector:
     def __init__(self, model, coarse_model):
-        self.model = model.eval()
-        self.model_coarse = coarse_model.eval()
-
-        if torch.cuda.is_available():
-            self.model.cuda()
-            self.model_coarse.cuda()
+        self.model = model
+        self.model_coarse = coarse_model
 
     @classmethod
-    def from_pretrained(cls, pretrained_model_or_path, filename=None, coarse_filename=None, cache_dir=None):
+    def from_pretrained(cls, pretrained_model_or_path, filename=None, coarse_filename=None, cache_dir=None, local_files_only=False):
         filename = filename or "sk_model.pth"
         coarse_filename = coarse_filename or "sk_model2.pth"
 
@@ -108,18 +105,33 @@ class LineartDetector:
             model_path = os.path.join(pretrained_model_or_path, filename)
             coarse_model_path = os.path.join(pretrained_model_or_path, coarse_filename)
         else:
-            model_path = hf_hub_download(pretrained_model_or_path, filename, cache_dir=cache_dir)
-            coarse_model_path = hf_hub_download(pretrained_model_or_path, coarse_filename, cache_dir=cache_dir)
+            model_path = hf_hub_download(pretrained_model_or_path, filename, cache_dir=cache_dir, local_files_only=local_files_only)
+            coarse_model_path = hf_hub_download(pretrained_model_or_path, coarse_filename, cache_dir=cache_dir, local_files_only=local_files_only)
 
         model = Generator(3, 1, 3)
         model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
+        model.eval()
 
         coarse_model = Generator(3, 1, 3)
         coarse_model.load_state_dict(torch.load(coarse_model_path, map_location=torch.device('cpu')))
+        coarse_model.eval()
 
         return cls(model, coarse_model)
+    
+    def to(self, device):
+        self.model.to(device)
+        self.model_coarse.to(device)
+        return self
+    
+    def __call__(self, input_image, coarse=False, detect_resolution=512, image_resolution=512, output_type="pil", **kwargs):
+        if "return_pil" in kwargs:
+            warnings.warn("return_pil is deprecated. Use output_type instead.", DeprecationWarning)
+            output_type = "pil" if kwargs["return_pil"] else "np"
+        if type(output_type) is bool:
+            warnings.warn("Passing `True` or `False` to `output_type` is deprecated and will raise an error in future versions")
+            if output_type:
+                output_type = "pil"
 
-    def __call__(self, input_image, coarse=False, detect_resolution=512, image_resolution=512, return_pil=True):
         device = next(iter(self.model.parameters())).device
         if not isinstance(input_image, np.ndarray):
             input_image = np.array(input_image, dtype=np.uint8)
@@ -149,7 +161,7 @@ class LineartDetector:
         detected_map = cv2.resize(detected_map, (W, H), interpolation=cv2.INTER_LINEAR)
         detected_map = 255 - detected_map
         
-        if return_pil:
+        if output_type == "pil":
             detected_map = Image.fromarray(detected_map)
 
         return detected_map
